@@ -1,0 +1,5 @@
+{
+  "name": "Roundtable Meeting Agent",
+  "description": "A multi-agent AI application that simulates a roundtable meeting with various stakeholders to provide a 360-degree analysis of a given topic. Agents provide insights, ask cross-questions, and a final summary is generated.",
+  "requestFramePermissions": []
+}
