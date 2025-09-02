@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Agent, HistoryItem } from '../types';
+import { getProjectHistory } from '../src/services/supabaseService';
 import HistoryList from './HistoryList';
 import SparklesIcon from './icons/SparklesIcon';
 
@@ -10,22 +11,25 @@ interface SetupScreenProps {
     onResume: (item: HistoryItem) => void;
 }
 
-const HISTORY_KEY = 'roundtableHistory_v4';
-
 const SetupScreen: React.FC<SetupScreenProps> = ({ onPlanMeetings, allAgents, onViewHistory, onResume }) => {
     const [topic, setTopic] = useState('');
     const [error, setError] = useState<string>('');
     const [history, setHistory] = useState<HistoryItem[]>([]);
+    const [loadingHistory, setLoadingHistory] = useState(true);
 
     useEffect(() => {
-        try {
-            const storedHistory = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
-            setHistory(storedHistory);
-        } catch (e) {
-            console.error("Failed to load history", e);
+        const loadHistory = async () => {
+            try {
+                const response = await getProjectHistory();
+                setHistory(response.history);
+            } catch (e) {
+                console.error("Failed to load history", e);
+            } finally {
+                setLoadingHistory(false);
+            }
         }
+        loadHistory();
     }, []);
-
 
     const handleStart = () => {
         if (!topic.trim()) {
@@ -53,12 +57,14 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onPlanMeetings, allAgents, on
                     />
                 </div>
 
-                <HistoryList 
-                    history={history}
-                    onView={onViewHistory}
-                    onLoadTopic={setTopic}
-                    onResume={onResume}
-                />
+                {!loadingHistory && (
+                    <HistoryList 
+                        history={history}
+                        onView={onViewHistory}
+                        onLoadTopic={setTopic}
+                        onResume={onResume}
+                    />
+                )}
                 
                 <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
                      <h3 className="text-lg font-medium text-indigo-300 mb-3">Available Experts</h3>

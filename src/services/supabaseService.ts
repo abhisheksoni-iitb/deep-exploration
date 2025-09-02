@@ -1,0 +1,118 @@
+import { supabase } from '../lib/supabase';
+import { PlannedMeeting, HistoryItem, FeedbackState } from '../types';
+
+export interface ProjectResponse {
+  project_id: string;
+  meeting_plan: PlannedMeeting[];
+  meetings: any[];
+}
+
+export interface MeetingTurnResponse {
+  action: 'meeting_started' | 'turn_completed' | 'meeting_completed' | 'final_synthesis_needed' | 'project_complete';
+  meeting?: any;
+  transcript?: any[];
+  agents?: any[];
+  project?: any;
+}
+
+export interface FinalReportResponse {
+  project: any;
+  finalSummary: any;
+}
+
+export const planMeetings = async (topic: string): Promise<ProjectResponse> => {
+  const { data, error } = await supabase.functions.invoke('plan-meetings', {
+    body: { topic }
+  });
+
+  if (error) {
+    throw new Error(error.message || 'Failed to plan meetings');
+  }
+
+  return data;
+};
+
+export const runMeetingTurn = async (projectId: string): Promise<MeetingTurnResponse> => {
+  const { data, error } = await supabase.functions.invoke('run-meeting-turn', {
+    body: { projectId }
+  });
+
+  if (error) {
+    throw new Error(error.message || 'Failed to run meeting turn');
+  }
+
+  return data;
+};
+
+export const synthesizeFinalReport = async (projectId: string): Promise<FinalReportResponse> => {
+  const { data, error } = await supabase.functions.invoke('synthesize-final-report', {
+    body: { projectId }
+  });
+
+  if (error) {
+    throw new Error(error.message || 'Failed to synthesize final report');
+  }
+
+  return data;
+};
+
+export const addUserInput = async (meetingId: string, userInput: string): Promise<{ success: boolean }> => {
+  const { data, error } = await supabase.functions.invoke('add-user-input', {
+    body: { meetingId, userInput }
+  });
+
+  if (error) {
+    throw new Error(error.message || 'Failed to add user input');
+  }
+
+  return data;
+};
+
+export const getProjectHistory = async (): Promise<{ history: HistoryItem[] }> => {
+  const { data, error } = await supabase.functions.invoke('get-project-history');
+
+  if (error) {
+    throw new Error(error.message || 'Failed to get project history');
+  }
+
+  return data;
+};
+
+export const saveAgentFeedback = async (
+  meetingId: string, 
+  agentId: string, 
+  rating: 'up' | 'down',
+  userId: string = 'anonymous'
+): Promise<{ success: boolean }> => {
+  const { data, error } = await supabase.functions.invoke('save-agent-feedback', {
+    body: { meetingId, agentId, rating, userId }
+  });
+
+  if (error) {
+    throw new Error(error.message || 'Failed to save agent feedback');
+  }
+
+  return data;
+};
+
+// Helper function to get current project state
+export const getCurrentProject = async (projectId: string) => {
+  const { data: project, error: projectError } = await supabase
+    .from('projects')
+    .select(`
+      *,
+      meetings (
+        *,
+        meeting_agents (agent_id),
+        transcript_items (*)
+      )
+    `)
+    .eq('id', projectId)
+    .single();
+
+  if (projectError) {
+    throw new Error('Failed to fetch project');
+  }
+
+  return project;
+};
