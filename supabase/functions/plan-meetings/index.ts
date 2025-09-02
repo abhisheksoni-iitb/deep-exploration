@@ -1,12 +1,37 @@
 /*
-  Supabase Edge Function: plan-meetings
+  # Supabase Edge Function: plan-meetings
   
   This function handles the AI-powered meeting planning for the Roundtable Meeting Agent.
   It takes a topic and returns a structured meeting plan using the Gemini API.
   
-  Endpoint: POST /functions/v1/plan-meetings
-  Body: { topic: string }
-  Response: { meetingPlan: PlannedMeeting[] }
+  ## Endpoint
+  POST /functions/v1/plan-meetings
+  
+  ## Request Body
+  ```json
+  {
+    "topic": "string - The discussion topic"
+  }
+  ```
+  
+  ## Response
+  ```json
+  {
+    "sessionId": "uuid - Created session ID",
+    "meetingPlan": [
+      {
+        "goal": "string - Meeting objective",
+        "agentIds": ["string[] - Agent IDs"]
+      }
+    ]
+  }
+  ```
+  
+  ## Authentication
+  Requires valid Supabase auth token in Authorization header
+  
+  ## Environment Variables
+  - GEMINI_API_KEY: Google Gemini API key (stored in Supabase secrets)
 */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
@@ -27,7 +52,7 @@ interface RequestBody {
   topic: string;
 }
 
-// Available agents configuration
+// Available agents configuration - matches frontend constants
 const ALL_AGENTS = [
   { id: 'product', name: 'Product Manager', shortPersona: 'Defines product vision, user personas, and a feature roadmap using the RICE framework.' },
   { id: 'vc', name: 'Venture Capitalist', shortPersona: 'Analyzes market size (TAM/SAM/SOM), business model, and competitive landscape for a 10x return potential.' },
@@ -53,7 +78,7 @@ const ALL_AGENTS = [
   { id: 'sustainability', name: 'Sustainability Officer', shortPersona: 'Analyzes the project through an Environmental, Social, and Governance (ESG) framework to ensure long-term responsibility.' }
 ];
 
-async function callGeminiAPI(prompt: string): Promise<any> {
+async function callGeminiAPI(prompt: string): Promise<string> {
   const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY');
   if (!GEMINI_API_KEY) {
     throw new Error('GEMINI_API_KEY environment variable is not set');
@@ -210,8 +235,27 @@ serve(async (req) => {
     const geminiResponse = await callGeminiAPI(prompt);
     const meetingPlan = parseJsonResponse<PlannedMeeting[]>(geminiResponse);
 
+    // Create session in database
+    const { data: session, error: sessionError } = await supabaseClient
+      .from('roundtable_sessions')
+      .insert({
+        user_id: user.id,
+        topic,
+        status: 'planning',
+        meeting_plan: meetingPlan
+      })
+      .select()
+      .single();
+
+    if (sessionError) {
+      throw new Error(`Failed to create session: ${sessionError.message}`);
+    }
+
     return new Response(
-      JSON.stringify({ meetingPlan }),
+      JSON.stringify({ 
+        sessionId: session.id,
+        meetingPlan 
+      }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
 
