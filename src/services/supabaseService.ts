@@ -95,14 +95,29 @@ export const addUserInput = async (meetingId: string, userInput: string): Promis
   return data;
 };
 
-export const getProjectHistory = async (): Promise<{ history: HistoryItem[] }> => {
-  const { data, error } = await supabase.functions.invoke('get-project-history');
+export const getProjectHistory = async () => {
+  try {
+    // First check if we have the required environment variables
+    if (!import.meta.env.VITE_SUPABASE_URL || !import.meta.env.VITE_SUPABASE_ANON_KEY) {
+      throw new Error('Missing Supabase configuration. Please check your .env file.');
+    }
 
-  if (error) {
-    throw new Error(error.message || 'Failed to get project history');
+    const { data, error } = await supabase.functions.invoke('get-project-history', {
+      headers: {
+        'Content-Type': 'application/json',
+      }
+    });
+    
+    if (error) {
+      console.error('Supabase function error:', error);
+      throw new Error(`Failed to get project history: ${error.message || 'Unknown error'}`);
+    }
+    
+    return data;
+  } catch (error) {
+    console.error('Error in getProjectHistory:', error);
+    throw error;
   }
-
-  return data;
 };
 
 export const saveAgentFeedback = async (

@@ -20,10 +20,20 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onPlanMeetings, allAgents, on
     useEffect(() => {
         const loadHistory = async () => {
             try {
+                // Check if Supabase is configured
+                if (!import.meta.env.VITE_SUPABASE_URL || !import.meta.env.VITE_SUPABASE_ANON_KEY) {
+                    console.warn('Supabase not configured, skipping history load');
+                    setHistory([]);
+                    setLoadingHistory(false);
+                    return;
+                }
+
                 const response = await getProjectHistory();
                 setHistory(response.history);
             } catch (e) {
-                console.error("Failed to load history", e);
+                console.error("Failed to load history:", e);
+                // Don't show error to user for missing history, just log it
+                setHistory([]);
             } finally {
                 setLoadingHistory(false);
             }
@@ -67,15 +77,15 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onPlanMeetings, allAgents, on
                 )}
                 
                 <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
-                     <h3 className="text-lg font-medium text-indigo-300 mb-3">Available Experts</h3>
-                     <div className="flex flex-wrap gap-x-4 gap-y-6 justify-center">
+                    <h3 className="text-lg font-medium text-indigo-300 mb-3">Available Experts</h3>
+                    <div className="flex flex-wrap gap-x-4 gap-y-6 justify-center">
                         {allAgents.map(agent => (
                             <div key={agent.id} className="flex flex-col items-center text-center w-24" title={agent.name}>
                                 <agent.avatar className="w-12 h-12 rounded-full transition-transform hover:scale-110" />
                                 <span className="text-xs mt-2 text-gray-300 w-full">{agent.name}</span>
                             </div>
                         ))}
-                     </div>
+                    </div>
                 </div>
 
                 {error && <p className="text-red-400 text-sm text-center">{error}</p>}
