@@ -17,6 +17,19 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
+    // Check for required environment variables
+    const supabaseUrl = Deno.env.get('SUPABASE_URL');
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    
+    if (!supabaseUrl || !supabaseServiceKey) {
+      return new Response(
+        JSON.stringify({ 
+          error: 'Missing required environment variables: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY' 
+        }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     // Get API key from request headers or environment
     const authHeader = req.headers.get('authorization');
     const userApiKey = authHeader?.replace('Bearer ', '');
@@ -30,8 +43,8 @@ Deno.serve(async (req: Request) => {
     }
 
     const supabase = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+      supabaseUrl,
+      supabaseServiceKey
     );
 
     const ai = new GoogleGenAI({ apiKey });

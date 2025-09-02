@@ -506,25 +506,6 @@ const App: React.FC = () => {
         }
     }, [continueNextTurn]);
     
-    // Show API key setup if needed
-    if (showApiKeySetup) {
-        return (
-            <div className="min-h-screen bg-gray-900 text-gray-100 font-sans p-4 sm:p-6 lg:p-8">
-                <div className="max-w-7xl mx-auto">
-                    <header className="text-center mb-8">
-                        <h1 className="text-4xl sm:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-indigo-600">
-                            Roundtable Meeting Agent
-                        </h1>
-                        <p className="mt-2 text-lg text-gray-400">
-                            A 360° AI-powered analysis of your ideas.
-                        </p>
-                    </header>
-                    <ApiKeySetup onKeyConfigured={handleApiKeyConfigured} />
-                </div>
-            </div>
-        );
-    }
-    
     // Auto-run next turn for ongoing meetings
     useEffect(() => {
         const shouldContinue = gameState >= GameState.ROUND_1 && 
@@ -663,6 +644,10 @@ const App: React.FC = () => {
                     </p>
                 </header>
 
+                {showApiKeySetup ? (
+                    <ApiKeySetup onKeyConfigured={handleApiKeyConfigured} />
+                ) : (
+                    <>
                 {errorMessage && (
                     <div className="bg-red-900/50 border border-red-700 text-red-200 px-4 py-3 rounded-md mb-6" role="alert">
                         <div className="flex justify-between items-center">
@@ -692,6 +677,8 @@ const App: React.FC = () => {
                 )}
 
                 {renderMainContent()}
+                    </>
+                )}
             </div>
         </div>
     );
