@@ -1,16 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import ApiKeySetup from './components/ApiKeySetup';
-import { Agent, TranscriptItem, Summary, HistoryItem, PlannedMeeting, MeetingResult, FeedbackState, GameState, FinalSummary } from './types';
+import { Agent, AppState, MeetingData, TranscriptItem, Summary, HistoryItem, Source, PlannedMeeting, MeetingResult, FeedbackState, GameState, FinalSummary } from './types';
 import { ALL_AGENTS } from './constants';
-import { 
-    planMeetings, 
-    runMeetingTurn, 
-    synthesizeFinalReport, 
-    addUserInput, 
-    getProjectHistory,
-    saveAgentFeedback,
-    getCurrentProject
-} from './src/services/supabaseService';
+import { runRoundForAgent, runFollowUpForAgent, runRound3ForAgent, synthesizeTranscript, planMeetings, synthesizeSeries } from './services/geminiService';
 import SetupScreen from './components/SetupScreen';
 import PlanReviewScreen from './components/PlanReviewScreen';
 import RoundtableMatrix from './components/RoundtableMatrix';
@@ -25,6 +16,9 @@ import ClipboardIcon from './components/icons/ClipboardIcon';
 import LightbulbIcon from './components/icons/LightbulbIcon';
 import ShieldExclamationIcon from './components/icons/ShieldExclamationIcon';
 
+
+const HISTORY_KEY = 'roundtableHistory_v4';
+const HISTORY_LIMIT = 20;
 
 // Helper Icon components to avoid creating new files
 const ThumbsUpIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
@@ -230,45 +224,47 @@ const rehydrateAgentData = (item: HistoryItem): HistoryItem => {
 
 const App: React.FC = () => {
     const [gameState, setGameState] = useState<GameState>(GameState.SETUP);
-    const [showApiKeySetup, setShowApiKeySetup] = useState<boolean>(false);
+    const [topic, setTopic] = useState<string>('');
     const [loading, setLoading] = useState<boolean>(false);
     const [errorMessage, setErrorMessage] = useState<string>('');
     const [viewingHistoryItem, setViewingHistoryItem] = useState<HistoryItem | null>(null);
 
-    // Current project state
-    const [currentProject, setCurrentProject] = useState<any>(null);
-    const [currentMeeting, setCurrentMeeting] = useState<any>(null);
-    const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
-    const [agents, setAgents] = useState<Agent[]>([]);
-    const [summary, setSummary] = useState<Summary | null>(null);
-    const [finalSummary, setFinalSummary] = useState<FinalSummary | null>(null);
+    // Multi-meeting state
     const [meetingPlan, setMeetingPlan] = useState<PlannedMeeting[] | null>(null);
+    const [currentMeetingIndex, setCurrentMeetingIndex] = useState<number>(0);
+    const [meetingResults, setMeetingResults] = useState<MeetingResult[]>([]);
+    const [finalSummary, setFinalSummary] = useState<FinalSummary | null>(null);
+    const [currentHistoryId, setCurrentHistoryId] = useState<string | null>(null);
+
+
+    // Per-meeting state (reset for each meeting)
+    const [selectedAgents, setSelectedAgents] = useState<Agent[]>([]);
+    const [meetingData, setMeetingData] = useState<MeetingData>({ round1: {}, round2: {}, round3: {} });
+    const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
+    const [summary, setSummary] = useState<Summary | null>(null);
+    const [currentAgentIndex, setCurrentAgentIndex] = useState<number>(0);
+    const [startTime, setStartTime] = useState<number | null>(null);
+    const [meetingDuration, setMeetingDuration] = useState<string | null>(null);
     const [feedback, setFeedback] = useState<FeedbackState>({});
-    
-    // Check for API key on mount
-    useEffect(() => {
-        const savedKey = localStorage.getItem('gemini_api_key');
-        if (!savedKey) {
-            setShowApiKeySetup(true);
-        }
-    }, []);
     
     const handleReset = () => {
         setGameState(GameState.SETUP);
-        setCurrentProject(null);
-        setCurrentMeeting(null);
+        setTopic('');
+        setSelectedAgents([]);
+        setMeetingData({ round1: {}, round2: {}, round3: {} });
         setTranscript([]);
-        setAgents([]);
         setSummary(null);
-        setFinalSummary(null);
-        setMeetingPlan(null);
+        setCurrentAgentIndex(0);
         setLoading(false);
         setErrorMessage('');
+        setStartTime(null);
+        setMeetingDuration(null);
+        setMeetingPlan(null);
+        setCurrentMeetingIndex(0);
+        setMeetingResults([]);
+        setFinalSummary(null);
+        setCurrentHistoryId(null);
         setFeedback({});
-    };
-
-    const handleApiKeyConfigured = () => {
-        setShowApiKeySetup(false);
     };
 
     const handleError = (message: string, error?: unknown) => {
@@ -298,14 +294,19 @@ const App: React.FC = () => {
         setLoading(false);
     };
 
-    const handlePlanMeetings = async (topic: string) => {
+    const handlePlanMeetings = async (newTopic: string) => {
+        setTopic(newTopic);
+        setCurrentHistoryId(new Date().toISOString());
         setGameState(GameState.PLANNING);
         setErrorMessage('');
         setLoading(true);
         try {
-            const response = await planMeetings(topic);
-            setCurrentProject({ id: response.project_id, topic });
-            setMeetingPlan(response.meeting_plan);
+            const plan = await planMeetings(newTopic, ALL_AGENTS);
+            const populatedPlan = plan.map(p => ({
+                ...p,
+                agents: p.agentIds.map(id => ALL_AGENTS.find(a => a.id === id)).filter((a): a is Agent => !!a)
+            }));
+            setMeetingPlan(populatedPlan);
             setGameState(GameState.PLAN_REVIEW);
         } catch (error) {
             handleError('Failed to generate a meeting plan.', error);
@@ -315,88 +316,288 @@ const App: React.FC = () => {
     };
 
     const handleViewHistory = (item: HistoryItem) => {
-        setViewingHistoryItem(item);
+        setViewingHistoryItem(rehydrateAgentData(item));
     };
 
-    const handleResumeFromHistory = async (item: HistoryItem) => {
-        // For now, we'll just load the topic and start fresh
-        // In a full implementation, you'd restore the exact state
+    const handleResumeFromHistory = (item: HistoryItem) => {
+        const hydratedItem = rehydrateAgentData(item);
+
+        if (!hydratedItem.meetingPlan) {
+            handleError("Cannot resume: Meeting plan is missing from history.");
+            return;
+        }
+    
         setViewingHistoryItem(null);
-        // You could implement full state restoration here
-        handleError("Resume functionality will be implemented in the next phase.");
-    };
-
-    const startMeetingSeries = async () => {
-        if (!currentProject) return;
         
-        setGameState(GameState.ROUND_1);
-        setLoading(true);
+        // Restore state from history
+        setCurrentHistoryId(hydratedItem.id);
+        setTopic(hydratedItem.topic);
+        setMeetingPlan(hydratedItem.meetingPlan);
+        setMeetingResults(hydratedItem.meetingResults);
+        setFinalSummary(hydratedItem.finalSummary);
         setErrorMessage('');
         
-        try {
-            await runNextMeetingTurn();
-        } catch (error) {
-            handleError('Failed to start meeting series.', error);
+        const isMidMeetingResume = hydratedItem.status === 'In Progress' && hydratedItem.gameState !== undefined && hydratedItem.currentAgentIndex !== undefined && hydratedItem.currentMeetingData && hydratedItem.currentTranscript;
+
+        if (isMidMeetingResume) {
+            setGameState(hydratedItem.gameState!);
+            setCurrentAgentIndex(hydratedItem.currentAgentIndex!);
+            setMeetingData(hydratedItem.currentMeetingData!);
+            setTranscript(hydratedItem.currentTranscript!);
+            setStartTime(hydratedItem.currentMeetingStartTime || Date.now());
+            
+            const currentMeetingIdx = hydratedItem.meetingResults.length;
+            setCurrentMeetingIndex(currentMeetingIdx);
+            if (hydratedItem.meetingPlan && hydratedItem.meetingPlan[currentMeetingIdx]) {
+                setSelectedAgents(hydratedItem.meetingPlan[currentMeetingIdx].agents || []);
+            }
+        } else {
+             // Original logic: resume from meeting boundary
+            const meetingsDone = hydratedItem.meetingResults.length;
+            const totalMeetings = hydratedItem.meetingPlan.length;
+        
+            if (meetingsDone < totalMeetings) {
+                // Resume from the next meeting
+                setupNextMeeting(meetingsDone, hydratedItem.meetingPlan);
+            } else {
+                // All meetings done, maybe it crashed during final synthesis?
+                if (hydratedItem.finalSummary) {
+                    setGameState(GameState.FINAL_COMPLETE);
+                } else {
+                    setGameState(GameState.FINAL_SYNTHESIS);
+                }
+            }
         }
     };
+
+    const startMeetingSeries = () => {
+        setMeetingResults([]);
+        setFinalSummary(null);
+        setupNextMeeting(0);
+    };
     
-    const runNextMeetingTurn = async () => {
-        if (!currentProject) return;
+    const setupNextMeeting = (index: number, planToUse?: PlannedMeeting[] | null) => {
+        const currentPlan = planToUse || meetingPlan;
+        if (!currentPlan) return;
         
+        setCurrentMeetingIndex(index);
+        
+        // Reset per-meeting state
+        const currentMeeting = currentPlan[index];
+        setSelectedAgents(currentMeeting.agents || []);
+        setTranscript([{ type: 'system', content: `Meeting ${index + 1}/${currentPlan.length} starting. Goal: "${currentMeeting.goal}"` }]);
+        const initialMeetingData: MeetingData = { round1: {}, round2: {}, round3: {} };
+        (currentMeeting.agents || []).forEach(agent => {
+            initialMeetingData.round1[agent.id] = { mainAnswer: '', crossQuestions: [] };
+            initialMeetingData.round2[agent.id] = { answers: [], crossQuestions: [] };
+            initialMeetingData.round3[agent.id] = { answers: [] };
+        });
+        setMeetingData(initialMeetingData);
+        setSummary(null);
+        setCurrentAgentIndex(0);
+        setMeetingDuration(null);
+        setStartTime(Date.now());
+        setFeedback({});
+        setGameState(GameState.ROUND_1);
+    };
+
+    const processMeeting = useCallback(async () => {
+        if (loading || !meetingPlan) return;
+        if(selectedAgents.length === 0 && gameState !== GameState.FINAL_SYNTHESIS) return;
+
         setLoading(true);
         setErrorMessage('');
+        
+        const currentMeetingGoal = meetingPlan[currentMeetingIndex]?.goal || '';
+        const previousMeetingSummary = currentMeetingIndex > 0 ? meetingResults[currentMeetingIndex-1]?.summary : undefined;
+        const previousMeetingUserFeedback = currentMeetingIndex > 0 ? meetingResults[currentMeetingIndex - 1]?.userFeedback : undefined;
 
         try {
-            const response = await runMeetingTurn(currentProject.id);
+            if (gameState === GameState.ROUND_1 && currentAgentIndex < selectedAgents.length) {
+                const currentAgent = selectedAgents[currentAgentIndex];
+                setTranscript(prev => [...prev, { type: 'system', content: `Round 1: ${currentAgent.name}'s turn...` }]);
+                const otherAgents = selectedAgents.filter(a => a.id !== currentAgent.id);
+                const result = await runRoundForAgent(currentAgent, topic, otherAgents, { 
+                    meetingGoal: currentMeetingGoal, 
+                    previousMeetingSummary,
+                    userContext: previousMeetingUserFeedback
+                });
+
+                setMeetingData(prev => ({ ...prev, round1: { ...prev.round1, [currentAgent.id]: result } }));
+                
+                const questions = (result.crossQuestions || []).map(q => {
+                    const toAgent = selectedAgents.find(a => a.name === q.ask_expert);
+                    if (!toAgent) return null;
+                    return { type: 'question' as const, from: currentAgent, to: toAgent, content: q.question };
+                }).filter((item): item is TranscriptItem & { type: 'question' } => !!item);
+
+                setTranscript(prev => [
+                    ...prev,
+                    { type: 'response', agent: currentAgent, content: `Main Answer: ${result.mainAnswer}`, sources: result.sources },
+                    ...questions
+                ]);
+                setCurrentAgentIndex(prev => prev + 1);
+
+            } else if (gameState === GameState.ROUND_1 && currentAgentIndex >= selectedAgents.length) {
+                const hasRound1Questions = Object.values(meetingData.round1).some(r => r.crossQuestions && r.crossQuestions.length > 0);
+                if (hasRound1Questions) {
+                    setGameState(GameState.ROUND_2);
+                    setCurrentAgentIndex(0);
+                    setTranscript(prev => [...prev, { type: 'system', content: `Round 1 complete. Starting Round 2.` }]);
+                } else {
+                    setGameState(GameState.SYNTHESIS);
+                    setTranscript(prev => [...prev, { type: 'system', content: `Round 1 complete. No new questions raised. Proceeding to summary.` }]);
+                }
             
-            switch (response.action) {
-                case 'meeting_started':
-                    setCurrentMeeting(response.meeting);
-                    setGameState(GameState.ROUND_1);
-                    // Get agents for this meeting
-                    if (response.meeting && meetingPlan) {
-                        const meetingAgents = meetingPlan[response.meeting.meeting_index]?.agents || [];
-                        setAgents(meetingAgents);
-                    }
-                    break;
+            } else if (gameState === GameState.ROUND_2 && currentAgentIndex < selectedAgents.length) {
+                const currentAgent = selectedAgents[currentAgentIndex];
+                setTranscript(prev => [...prev, { type: 'system', content: `Round 2: ${currentAgent.name}'s turn...` }]);
+                const questionsForAgent = Object.values(meetingData.round1).flatMap(r => r.crossQuestions || []).filter(q => q.ask_expert === currentAgent.name).map(q => q.question);
+                
+                if (questionsForAgent.length > 0) {
+                    const otherAgents = selectedAgents.filter(a => a.id !== currentAgent.id);
+                    const result = await runFollowUpForAgent(currentAgent, topic, questionsForAgent, otherAgents);
+                    setMeetingData(prev => ({ ...prev, round2: { ...prev.round2, [currentAgent.id]: result } }));
+                    const transcriptAnswers: TranscriptItem[] = result.answers.map((a, index) => ({ type: 'answer' as const, agent: currentAgent, content: `Answered: "${a.question}" with "${a.answer}"`, sources: index === 0 ? result.sources : undefined }));
                     
-                case 'turn_completed':
-                    // Update transcript with new items
-                    if (response.transcript) {
-                        const transformedTranscript = response.transcript.map(item => ({
-                            type: item.type,
-                            content: item.content,
-                            agent: item.agent_id ? ALL_AGENTS.find(a => a.id === item.agent_id) : undefined,
-                            from: item.from_agent ? ALL_AGENTS.find(a => a.id === item.from_agent) : undefined,
-                            to: item.to_agent ? ALL_AGENTS.find(a => a.id === item.to_agent) : undefined,
-                            sources: item.sources
-                        }));
-                        setTranscript(transformedTranscript);
-                    }
-                    break;
-                    
-                case 'meeting_completed':
-                    setSummary(response.meeting?.summary);
-                    setGameState(GameState.COMPLETE);
-                    break;
-                    
-                case 'final_synthesis_needed':
-                    setGameState(GameState.FINAL_SYNTHESIS);
-                    break;
-                    
-                case 'project_complete':
-                    setGameState(GameState.FINAL_COMPLETE);
-                    setFinalSummary(response.project?.final_summary);
-                    break;
+                    const questions = (result.crossQuestions || []).map(q => {
+                        const toAgent = selectedAgents.find(a => a.name === q.ask_expert);
+                        if (!toAgent) return null;
+                        return { type: 'question' as const, from: currentAgent, to: toAgent, content: q.question };
+                    }).filter((item): item is TranscriptItem & { type: 'question' } => !!item);
+
+                    setTranscript(prev => [ ...prev, ...transcriptAnswers, ...questions ]);
+                } else {
+                     setTranscript(prev => [...prev, { type: 'system', content: `${currentAgent.name} had no questions to answer.` }]);
+                }
+                setCurrentAgentIndex(prev => prev + 1);
+
+            } else if (gameState === GameState.ROUND_2 && currentAgentIndex >= selectedAgents.length) {
+                const hasRound2Questions = Object.values(meetingData.round2).some(r => r.crossQuestions && r.crossQuestions.length > 0);
+                if (hasRound2Questions) {
+                    setGameState(GameState.ROUND_3);
+                    setCurrentAgentIndex(0);
+                    setTranscript(prev => [...prev, { type: 'system', content: `Round 2 complete. Starting Round 3.` }]);
+                } else {
+                    setGameState(GameState.SYNTHESIS);
+                    setTranscript(prev => [...prev, { type: 'system', content: `Round 2 complete. No new questions raised. Proceeding to summary.` }]);
+                }
+            
+            } else if (gameState === GameState.ROUND_3 && currentAgentIndex < selectedAgents.length) {
+                const currentAgent = selectedAgents[currentAgentIndex];
+                setTranscript(prev => [...prev, { type: 'system', content: `Round 3: ${currentAgent.name}'s turn...` }]);
+                const questionsForAgent = Object.values(meetingData.round2).flatMap(r => r.crossQuestions || []).filter(q => q.ask_expert === currentAgent.name).map(q => q.question);
+
+                if (questionsForAgent.length > 0) {
+                    const result = await runRound3ForAgent(currentAgent, topic, questionsForAgent);
+                    setMeetingData(prev => ({ ...prev, round3: { ...prev.round3, [currentAgent.id]: result } }));
+                    setTranscript(prev => [ ...prev, ...result.answers.map(a => ({ type: 'answer' as const, agent: currentAgent, content: `Final Answer: "${a.question}" with "${a.answer}"` })) ]);
+                } else {
+                    setTranscript(prev => [...prev, { type: 'system', content: `${currentAgent.name} had no new questions to answer.` }]);
+                }
+                setCurrentAgentIndex(prev => prev + 1);
+
+            } else if (gameState === GameState.ROUND_3 && currentAgentIndex >= selectedAgents.length) {
+                setGameState(GameState.SYNTHESIS);
+                setTranscript(prev => [...prev, { type: 'system', content: `Round 3 complete. Synthesizing meeting summary...` }]);
+            
+            } else if (gameState === GameState.SYNTHESIS) {
+                const summaryResult = await synthesizeTranscript(topic, selectedAgents, transcript);
+                
+                const endTime = Date.now();
+                const durationInSeconds = Math.round((endTime - (startTime || endTime)) / 1000);
+                const durationString = formatDuration(durationInSeconds);
+                setMeetingDuration(durationString);
+                setSummary(summaryResult);
+                
+                const newMeetingResult: MeetingResult = {
+                    goal: currentMeetingGoal,
+                    agents: selectedAgents,
+                    transcript: [...transcript, { type: 'system', content: 'Synthesis complete.' }],
+                    summary: summaryResult,
+                    duration: durationString,
+                };
+                setMeetingResults(prev => [...prev, newMeetingResult]);
+
+                setGameState(GameState.COMPLETE);
+                setTranscript(prev => [...prev, { type: 'system', content: 'Meeting summary complete.' }]);
+            
+            } else if (gameState === GameState.FINAL_SYNTHESIS) {
+                const result = await synthesizeSeries(topic, meetingResults);
+                setFinalSummary(result.finalSummary);
+                setGameState(GameState.FINAL_COMPLETE);
             }
         } catch (error) {
-            handleError('Failed to run meeting turn.', error);
+            handleError(`An error occurred during the meeting process.`, error);
         } finally {
             setLoading(false);
         }
-    };
+    }, [gameState, currentAgentIndex, loading, selectedAgents, topic, meetingData, transcript, startTime, meetingPlan, currentMeetingIndex, meetingResults]);
+    
+    // Auto-run the processMeeting function when state is ready
+    useEffect(() => {
+        const isMeetingRunning = gameState >= GameState.ROUND_1 && gameState < GameState.COMPLETE;
+        if ((isMeetingRunning || gameState === GameState.SYNTHESIS || gameState === GameState.FINAL_SYNTHESIS) && !loading && !errorMessage) {
+            const timer = setTimeout(() => processMeeting(), 1000);
+            return () => clearTimeout(timer);
+        }
+    }, [gameState, currentAgentIndex, loading, processMeeting, errorMessage]);
+
+    // Transition from a completed meeting to the next step
+    useEffect(() => {
+        if (gameState === GameState.COMPLETE) {
+            const isLast = meetingPlan ? currentMeetingIndex === meetingPlan.length - 1 : false;
+            if (!isLast) {
+                const timer = setTimeout(() => setGameState(GameState.AWAITING_USER_INPUT), 500);
+                return () => clearTimeout(timer);
+            }
+        }
+    }, [gameState, currentMeetingIndex, meetingPlan]);
+
+    // Auto-save history whenever the state changes
+    useEffect(() => {
+        if (gameState === GameState.SETUP || viewingHistoryItem || !currentHistoryId) {
+            return;
+        }
+    
+        const status: HistoryItem['status'] = gameState === GameState.FINAL_COMPLETE ? 'Completed' : 'In Progress';
+        const isMidMeeting = gameState >= GameState.ROUND_1 && gameState < GameState.FINAL_COMPLETE;
+    
+        const newHistoryItem: HistoryItem = {
+            id: currentHistoryId,
+            topic,
+            status,
+            date: new Date().toISOString(),
+            meetingPlan,
+            meetingResults,
+            finalSummary,
+            // Add in-progress state if applicable
+            gameState: isMidMeeting ? gameState : undefined,
+            currentAgentIndex: isMidMeeting ? currentAgentIndex : undefined,
+            currentMeetingData: isMidMeeting ? meetingData : undefined,
+            currentTranscript: isMidMeeting ? transcript : undefined,
+            currentMeetingStartTime: isMidMeeting ? startTime : undefined,
+        };
+    
+        try {
+            const history: HistoryItem[] = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+            const existingIndex = history.findIndex(item => item.id === currentHistoryId);
+            
+            if (existingIndex !== -1) {
+                history[existingIndex] = newHistoryItem;
+            } else {
+                history.unshift(newHistoryItem);
+            }
+            localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, HISTORY_LIMIT)));
+        } catch (e) {
+            console.error("Failed to auto-save history", e);
+        }
+    
+    }, [meetingPlan, meetingResults, finalSummary, gameState, currentHistoryId, topic, viewingHistoryItem, currentAgentIndex, meetingData, transcript, startTime]);
+
 
     const transcriptToMarkdown = (transcriptItems: TranscriptItem[]): string => {
+        // ... (function content is unchanged)
         return transcriptItems.map(item => {
             switch (item.type) {
                 case 'system':
@@ -434,95 +635,28 @@ const App: React.FC = () => {
         URL.revokeObjectURL(url);
     };
 
-    const handleFeedback = async (agentId: string, vote: 'up' | 'down') => {
+    const handleFeedback = (agentId: string, vote: 'up' | 'down') => {
         setFeedback(prev => ({...prev, [agentId]: prev[agentId] === vote ? null : vote }));
-        
-        if (currentMeeting) {
-            try {
-                await saveAgentFeedback(currentMeeting.id, agentId, vote);
-            } catch (error) {
-                console.error('Failed to save feedback:', error);
-            }
-        }
     };
 
-    const handleContinueToNextMeeting = async (userInput: string) => {
-        if (!currentMeeting) return;
-        
-        try {
-            await addUserInput(currentMeeting.id, userInput);
-            setGameState(GameState.ROUND_1);
-            await runNextMeetingTurn();
-        } catch (error) {
-            handleError('Failed to continue to next meeting.', error);
-        }
-    };
-    
-    const handleGenerateFinalReport = async () => {
-        if (!currentProject) return;
-        
-        setLoading(true);
-        try {
-            const response = await synthesizeFinalReport(currentProject.id);
-            setFinalSummary(response.finalSummary);
-            setGameState(GameState.FINAL_COMPLETE);
-        } catch (error) {
-            handleError('Failed to generate final report.', error);
-        } finally {
-            setLoading(false);
-        }
-    };
-    
-    // Auto-advance meeting turns
-    useEffect(() => {
-        if (gameState === GameState.ROUND_1 && !loading && !errorMessage && currentProject) {
-            const timer = setTimeout(() => runNextMeetingTurn(), 2000);
-            return () => clearTimeout(timer);
-        }
-    }, [gameState, loading, errorMessage, currentProject]);
-    
-    // Auto-transition to user input after meeting completion
-    useEffect(() => {
-        if (gameState === GameState.COMPLETE && meetingPlan && currentMeeting) {
-            const isLastMeeting = currentMeeting.meeting_index === meetingPlan.length - 1;
-            if (!isLastMeeting) {
-                const timer = setTimeout(() => setGameState(GameState.AWAITING_USER_INPUT), 1000);
-                return () => clearTimeout(timer);
+    const handleContinueToNextMeeting = (userInput: string) => {
+        // Update the last meeting result with the user's feedback
+        setMeetingResults(prev => {
+            const updatedResults = [...prev];
+            if (updatedResults.length > 0) {
+                updatedResults[updatedResults.length - 1].userFeedback = userInput;
             }
-        }
-    }, [gameState, meetingPlan, currentMeeting]);
-    
-    // Continue meeting turns automatically
-    const continueNextTurn = useCallback(() => {
-        if (gameState === GameState.ROUND_1 && !loading && !errorMessage) {
-            runNextMeetingTurn();
-        }
-    }, [gameState, loading, errorMessage]);
-    
-    useEffect(() => {
-        if (gameState === GameState.ROUND_1 && !loading && !errorMessage) {
-            const timer = setTimeout(continueNextTurn, 1500);
-            return () => clearTimeout(timer);
-        }
-    }, [continueNextTurn]);
-    
-    // Auto-run next turn for ongoing meetings
-    useEffect(() => {
-        const shouldContinue = gameState >= GameState.ROUND_1 && 
-                              gameState < GameState.COMPLETE && 
-                              !loading && 
-                              !errorMessage && 
-                              currentProject;
-                              
-        if (shouldContinue) {
-            const timer = setTimeout(() => runNextMeetingTurn(), 1000);
-            return () => clearTimeout(timer);
-        }
-    }, [transcript, gameState, loading, errorMessage, currentProject]);
+            return updatedResults;
+        });
+        // Setup and start the next meeting
+        setupNextMeeting(currentMeetingIndex + 1);
+    };
     
     if (viewingHistoryItem) {
         return <HistoryViewer item={viewingHistoryItem} onClose={() => setViewingHistoryItem(null)} />;
     }
+
+    const isLastMeeting = meetingPlan ? currentMeetingIndex === meetingPlan.length - 1 : false;
 
     const renderMainContent = () => {
         if (gameState === GameState.SETUP) {
@@ -531,37 +665,33 @@ const App: React.FC = () => {
         if (gameState === GameState.PLANNING || gameState === GameState.PLAN_REVIEW) {
             return <PlanReviewScreen 
                 plan={meetingPlan} 
-                topic={currentProject?.topic || ''}
+                topic={topic}
                 onStart={startMeetingSeries}
                 onCancel={handleReset}
             />
         }
 
-        const currentMeetingGoal = currentMeeting?.goal || '';
+        const currentMeetingGoal = meetingPlan ? meetingPlan[currentMeetingIndex].goal : '';
         const isMeetingFinished = gameState === GameState.COMPLETE || gameState === GameState.AWAITING_USER_INPUT;
-        const isLastMeeting = meetingPlan && currentMeeting ? 
-            currentMeeting.meeting_index === meetingPlan.length - 1 : false;
 
         return (
             <div className="space-y-8">
                 <div>
                    <h2 className="text-2xl font-bold mb-2 text-indigo-400">Topic</h2>
-                   <p className="text-lg bg-gray-800 p-4 rounded-lg">{currentProject?.topic || ''}</p>
-                   {currentMeeting && (
-                       <p className="text-md text-gray-400 mt-2">
-                           Meeting {currentMeeting.meeting_index + 1}/{meetingPlan?.length}: <span className="font-semibold text-gray-300">{currentMeetingGoal}</span>
-                       </p>
-                   )}
+                   <p className="text-lg bg-gray-800 p-4 rounded-lg">{topic}</p>
+                   <p className="text-md text-gray-400 mt-2">
+                       Meeting {currentMeetingIndex + 1}/{meetingPlan?.length}: <span className="font-semibold text-gray-300">{currentMeetingGoal}</span>
+                   </p>
                 </div>
                  <TurnIndicator 
-                    agents={agents}
-                    currentAgent={agents[0]} // Simplified for now
+                    agents={selectedAgents}
+                    currentAgent={selectedAgents[currentAgentIndex]}
                     gameState={gameState}
                 />
                 <RoundtableMatrix 
-                    agents={agents} 
-                    data={{ round1: {}, round2: {}, round3: {} }} // Simplified for now
-                    currentAgent={agents[0]}
+                    agents={selectedAgents} 
+                    data={meetingData}
+                    currentAgent={selectedAgents[currentAgentIndex]}
                     gameState={gameState}
                 />
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -586,14 +716,16 @@ const App: React.FC = () => {
                                 <Spinner />
                                 <p className="mt-4 text-lg text-gray-400 animate-pulse-fast">AI agents are thinking...</p>
                                 <p className="text-sm text-gray-500 mt-2">
-                                    Processing meeting turn...
+                                    {gameState < GameState.SYNTHESIS && `Processing: ${selectedAgents[currentAgentIndex]?.name} (Round ${gameState-GameState.ROUND_1+1})`}
+                                    {gameState === GameState.SYNTHESIS && `Synthesizing meeting summary...`}
+                                    {gameState === GameState.FINAL_SYNTHESIS && "Synthesizing final project report..."}
                                 </p>
                             </div>
                         )}
                         {isMeetingFinished && summary && (
                             <div className="space-y-6">
-                                <SummaryDisplay summary={summary} duration={currentMeeting?.duration} />
-                                <AgentFeedback agents={agents} feedback={feedback} onFeedback={handleFeedback} />
+                                <SummaryDisplay summary={summary} duration={meetingDuration} />
+                                <AgentFeedback agents={selectedAgents} feedback={feedback} onFeedback={handleFeedback} />
                             </div>
                         )}
                         {gameState === GameState.FINAL_COMPLETE && finalSummary && (
@@ -602,7 +734,7 @@ const App: React.FC = () => {
                          { (gameState < GameState.COMPLETE || (gameState > GameState.COMPLETE && gameState < GameState.FINAL_COMPLETE)) && !loading && (
                             <div className="bg-gray-800 p-6 rounded-lg h-full flex flex-col items-center justify-center text-center">
                                  <h3 className="text-xl font-bold text-indigo-300">Meeting in Progress</h3>
-                                 <p className="mt-2 text-gray-400">The roundtable is active. View the transcript for live updates.</p>
+                                 <p className="mt-2 text-gray-400">The roundtable is active. View the matrix and transcript for live updates.</p>
                             </div>
                         )}
                     </div>
@@ -613,7 +745,7 @@ const App: React.FC = () => {
                     )}
                     {gameState === GameState.COMPLETE && isLastMeeting && (
                         <button
-                            onClick={handleGenerateFinalReport}
+                            onClick={() => setGameState(GameState.FINAL_SYNTHESIS)}
                             className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg transition duration-300 ease-in-out transform hover:scale-105"
                         >
                             Generate Final Report
@@ -630,8 +762,8 @@ const App: React.FC = () => {
                 </div>
             </div>
         );
-    };
-    
+    }
+
     return (
         <div className="min-h-screen bg-gray-900 text-gray-100 font-sans p-4 sm:p-6 lg:p-8">
             <div className="max-w-7xl mx-auto">
@@ -644,10 +776,6 @@ const App: React.FC = () => {
                     </p>
                 </header>
 
-                {showApiKeySetup ? (
-                    <ApiKeySetup onKeyConfigured={handleApiKeyConfigured} />
-                ) : (
-                    <>
                 {errorMessage && (
                     <div className="bg-red-900/50 border border-red-700 text-red-200 px-4 py-3 rounded-md mb-6" role="alert">
                         <div className="flex justify-between items-center">
@@ -659,7 +787,7 @@ const App: React.FC = () => {
                                 <button
                                     onClick={() => {
                                         setErrorMessage('');
-                                        runNextMeetingTurn();
+                                        processMeeting();
                                     }}
                                     className="bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-2 px-4 rounded transition-colors text-sm"
                                 >
@@ -676,9 +804,8 @@ const App: React.FC = () => {
                     </div>
                 )}
 
+
                 {renderMainContent()}
-                    </>
-                )}
             </div>
         </div>
     );
