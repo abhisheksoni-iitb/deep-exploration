@@ -1,37 +1,30 @@
 /*
-  # Supabase Edge Function: plan-meetings
+  # Supabase Edge Function: synthesize-meeting
   
-  This function handles the AI-powered meeting planning for the Roundtable Meeting Agent.
-  It takes a topic and returns a structured meeting plan using the Gemini API.
+  This function synthesizes a meeting transcript into a structured summary.
   
   ## Endpoint
-  POST /functions/v1/plan-meetings
+  POST /functions/v1/synthesize-meeting
   
   ## Request Body
   ```json
   {
-    "topic": "string - The discussion topic"
+    "meetingId": "uuid - Meeting ID",
+    "transcript": "array - Meeting transcript items"
   }
   ```
   
   ## Response
   ```json
   {
-    "sessionId": "uuid - Created session ID",
-    "meetingPlan": [
-      {
-        "goal": "string - Meeting objective",
-        "agentIds": ["string[] - Agent IDs"]
-      }
-    ]
+    "summary": {
+      "keyInsights": ["string[]"],
+      "actionItems": ["string[]"], 
+      "potentialRisks": ["string[]"],
+      "consensusPoints": ["string[]"]
+    }
   }
   ```
-  
-  ## Authentication
-  Requires valid Supabase auth token in Authorization header
-  
-  ## Environment Variables
-  - GEMINI_API_KEY: Google Gemini API key (stored in Supabase secrets)
 */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
@@ -43,13 +36,9 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
-interface PlannedMeeting {
-  goal: string;
-  agentIds: string[];
-}
-
 interface RequestBody {
-  topic: string;
+  meetingId: string;
+  transcript: any[];
 }
 
 async function callGeminiAPI(prompt: string): Promise<string> {
@@ -166,85 +155,72 @@ serve(async (req) => {
       )
     }
 
-    const { topic }: RequestBody = await req.json()
+    const { meetingId, transcript }: RequestBody = await req.json()
 
-    if (!topic || typeof topic !== 'string') {
+    if (!meetingId || !transcript) {
       return new Response(
-        JSON.stringify({ error: 'Topic is required and must be a string' }),
+        JSON.stringify({ error: 'Missing required fields' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    // Get all agents from database
-    const { data: agents, error: agentsError } = await supabaseClient
-      .from('agents')
-      .select('id, name, short_persona')
-      .order('name');
+    // Verify meeting belongs to user
+    const { data: meeting, error: meetingError } = await supabaseClient
+      .from('roundtable_meetings')
+      .select(`
+        *,
+        roundtable_sessions!inner(user_id, topic)
+      `)
+      .eq('id', meetingId)
+      .eq('roundtable_sessions.user_id', user.id)
+      .single();
 
-    if (agentsError) {
-      throw new Error(`Failed to fetch agents: ${agentsError.message}`);
+    if (meetingError || !meeting) {
+      return new Response(
+        JSON.stringify({ error: 'Meeting not found or access denied' }),
+        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
 
-    // Generate meeting plan using Gemini
+    // Condense transcript for synthesis
+    const condensedTranscript = transcript
+      .filter((item: any) => item.type === 'response' || item.type === 'answer')
+      .map((item: any) => {
+        if (item.type === 'response') {
+          return `[${item.agent?.name || 'Agent'}'s Main Answer]: ${item.content}`;
+        }
+        if (item.type === 'answer') {
+          return `[${item.agent?.name || 'Agent'}'s Answer]: ${item.content}`;
+        }
+        return '';
+      })
+      .join('\n\n');
+
     const prompt = `
-      You are an expert project manager and strategist. Your task is to devise a logical and efficient series of meetings to analyze a project from inception to a go-to-market plan.
+      You are an expert meeting facilitator. Analyze the following condensed roundtable meeting transcript.
+      The goal of this meeting was to discuss: "${meeting.roundtable_sessions.topic}"
+      Meeting Goal: "${meeting.goal}"
 
-      Topic: "${topic}"
+      Condensed Transcript:
+      ---
+      ${condensedTranscript}
+      ---
 
-      Available Experts (use their 'id' for selection):
-      ${agents.map(a => `- ${a.name} (id: ${a.id}) - Core function: ${a.short_persona}`).join('\n')}
-
-      Your goal is to create a project plan as a series of meetings. Follow these rules strictly:
-      1. **Project Lifecycle Flow:** The meetings must follow a logical project lifecycle. Start with strategy and validation, then move to feasibility and design, and finally cover execution and go-to-market.
-      2. **Strict 3-Expert Limit Per Meeting:** Each meeting MUST have exactly 3 experts. No more, no less. This is a critical constraint for focus.
-      3. **Optimal Expert Selection:** For each meeting's goal, select the three most critical experts.
-      4. **Actionable Goals:** Each meeting must have a concise, actionable 'goal'.
-      5. **Number of Meetings:** Plan for 2 to 4 meetings in total.
+      Based on the entire discussion, generate a comprehensive summary. Your summary must be structured as a JSON object with the following keys: "keyInsights", "actionItems", "potentialRisks", and "consensusPoints". Each key must have an array of strings as its value. Ensure each point is concise and actionable.
 
       CRITICAL FORMATTING RULE: Your entire response must be ONLY a single, raw, valid JSON object. Do not add any text, markdown, or formatting before or after the JSON.
-
-      Example format:
-      [
-        {
-          "goal": "Define the product vision, validate the market opportunity, and assess the business case.",
-          "agentIds": ["product", "vc", "marketing"]
-        },
-        {
-          "goal": "Determine technical feasibility, design the core user experience, and identify legal risks.",
-          "agentIds": ["tech", "design", "legal"]
-        }
-      ]
     `;
 
     const geminiResponse = await callGeminiAPI(prompt);
-    const meetingPlan = parseJsonResponse<PlannedMeeting[]>(geminiResponse);
-
-    // Create session in database
-    const { data: session, error: sessionError } = await supabaseClient
-      .from('roundtable_sessions')
-      .insert({
-        user_id: user.id,
-        topic,
-        status: 'planning',
-        meeting_plan: meetingPlan
-      })
-      .select()
-      .single();
-
-    if (sessionError) {
-      throw new Error(`Failed to create session: ${sessionError.message}`);
-    }
+    const summary = parseJsonResponse(geminiResponse);
 
     return new Response(
-      JSON.stringify({ 
-        sessionId: session.id,
-        meetingPlan 
-      }),
+      JSON.stringify({ summary }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
 
   } catch (error) {
-    console.error('Error in plan-meetings function:', error);
+    console.error('Error in synthesize-meeting function:', error);
     return new Response(
       JSON.stringify({ error: error.message || 'Internal server error' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
