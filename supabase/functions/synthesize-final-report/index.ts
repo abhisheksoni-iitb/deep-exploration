@@ -17,12 +17,24 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
+    // Get API key from request headers or environment
+    const authHeader = req.headers.get('authorization');
+    const userApiKey = authHeader?.replace('Bearer ', '');
+    const apiKey = userApiKey || Deno.env.get('GEMINI_API_KEY');
+    
+    if (!apiKey) {
+      return new Response(
+        JSON.stringify({ error: 'No API key provided' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    const ai = new GoogleGenAI({ apiKey: Deno.env.get('GEMINI_API_KEY') ?? '' });
+    const ai = new GoogleGenAI({ apiKey });
 
     const { projectId }: SynthesizeFinalReportRequest = await req.json();
 

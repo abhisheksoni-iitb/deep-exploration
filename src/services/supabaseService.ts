@@ -21,8 +21,17 @@ export interface FinalReportResponse {
 }
 
 export const planMeetings = async (topic: string): Promise<ProjectResponse> => {
+  // Get user's API key if available
+  const userApiKey = localStorage.getItem('gemini_api_key');
+  const headers: Record<string, string> = {};
+  
+  if (userApiKey) {
+    headers['Authorization'] = `Bearer ${userApiKey}`;
+  }
+
   const { data, error } = await supabase.functions.invoke('plan-meetings', {
-    body: { topic }
+    body: { topic },
+    headers
   });
 
   if (error) {
@@ -33,8 +42,17 @@ export const planMeetings = async (topic: string): Promise<ProjectResponse> => {
 };
 
 export const runMeetingTurn = async (projectId: string): Promise<MeetingTurnResponse> => {
+  // Get user's API key if available
+  const userApiKey = localStorage.getItem('gemini_api_key');
+  const headers: Record<string, string> = {};
+  
+  if (userApiKey) {
+    headers['Authorization'] = `Bearer ${userApiKey}`;
+  }
+
   const { data, error } = await supabase.functions.invoke('run-meeting-turn', {
-    body: { projectId }
+    body: { projectId },
+    headers
   });
 
   if (error) {
@@ -45,8 +63,17 @@ export const runMeetingTurn = async (projectId: string): Promise<MeetingTurnResp
 };
 
 export const synthesizeFinalReport = async (projectId: string): Promise<FinalReportResponse> => {
+  // Get user's API key if available
+  const userApiKey = localStorage.getItem('gemini_api_key');
+  const headers: Record<string, string> = {};
+  
+  if (userApiKey) {
+    headers['Authorization'] = `Bearer ${userApiKey}`;
+  }
+
   const { data, error } = await supabase.functions.invoke('synthesize-final-report', {
-    body: { projectId }
+    body: { projectId },
+    headers
   });
 
   if (error) {

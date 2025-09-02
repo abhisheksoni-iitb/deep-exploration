@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import ApiKeySetup from './components/ApiKeySetup';
 import { Agent, TranscriptItem, Summary, HistoryItem, PlannedMeeting, MeetingResult, FeedbackState, GameState, FinalSummary } from './types';
 import { ALL_AGENTS } from './constants';
 import { 
@@ -229,6 +230,7 @@ const rehydrateAgentData = (item: HistoryItem): HistoryItem => {
 
 const App: React.FC = () => {
     const [gameState, setGameState] = useState<GameState>(GameState.SETUP);
+    const [showApiKeySetup, setShowApiKeySetup] = useState<boolean>(false);
     const [loading, setLoading] = useState<boolean>(false);
     const [errorMessage, setErrorMessage] = useState<string>('');
     const [viewingHistoryItem, setViewingHistoryItem] = useState<HistoryItem | null>(null);
@@ -243,6 +245,14 @@ const App: React.FC = () => {
     const [meetingPlan, setMeetingPlan] = useState<PlannedMeeting[] | null>(null);
     const [feedback, setFeedback] = useState<FeedbackState>({});
     
+    // Check for API key on mount
+    useEffect(() => {
+        const savedKey = localStorage.getItem('gemini_api_key');
+        if (!savedKey) {
+            setShowApiKeySetup(true);
+        }
+    }, []);
+    
     const handleReset = () => {
         setGameState(GameState.SETUP);
         setCurrentProject(null);
@@ -255,6 +265,10 @@ const App: React.FC = () => {
         setLoading(false);
         setErrorMessage('');
         setFeedback({});
+    };
+
+    const handleApiKeyConfigured = () => {
+        setShowApiKeySetup(false);
     };
 
     const handleError = (message: string, error?: unknown) => {
@@ -491,6 +505,25 @@ const App: React.FC = () => {
             return () => clearTimeout(timer);
         }
     }, [continueNextTurn]);
+    
+    // Show API key setup if needed
+    if (showApiKeySetup) {
+        return (
+            <div className="min-h-screen bg-gray-900 text-gray-100 font-sans p-4 sm:p-6 lg:p-8">
+                <div className="max-w-7xl mx-auto">
+                    <header className="text-center mb-8">
+                        <h1 className="text-4xl sm:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-indigo-600">
+                            Roundtable Meeting Agent
+                        </h1>
+                        <p className="mt-2 text-lg text-gray-400">
+                            A 360° AI-powered analysis of your ideas.
+                        </p>
+                    </header>
+                    <ApiKeySetup onKeyConfigured={handleApiKeyConfigured} />
+                </div>
+            </div>
+        );
+    }
     
     // Auto-run next turn for ongoing meetings
     useEffect(() => {

@@ -81,6 +81,17 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onPlanMeetings, allAgents, on
                 {error && <p className="text-red-400 text-sm text-center">{error}</p>}
                 
                 <div className="text-center pt-4">
+                    <div className="mb-4">
+                        <button
+                            onClick={() => {
+                                localStorage.removeItem('gemini_api_key');
+                                window.location.reload();
+                            }}
+                            className="text-sm text-gray-400 hover:text-gray-200 underline"
+                        >
+                            Change API Key
+                        </button>
+                    </div>
                     <button
                         onClick={handleStart}
                         className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-bold py-3 px-8 rounded-lg text-lg transition duration-300 ease-in-out transform hover:scale-105 shadow-lg inline-flex items-center gap-2"
