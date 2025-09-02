@@ -98,8 +98,12 @@ export const addUserInput = async (meetingId: string, userInput: string): Promis
 export const getProjectHistory = async () => {
   try {
     // First check if we have the required environment variables
-    if (!import.meta.env.VITE_SUPABASE_URL || !import.meta.env.VITE_SUPABASE_ANON_KEY) {
-      throw new Error('Missing Supabase configuration. Please check your .env file.');
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+    
+    if (!supabaseUrl || !supabaseAnonKey || supabaseUrl === 'your_supabase_project_url' || supabaseAnonKey === 'your_supabase_anon_key') {
+      console.warn('Supabase not configured properly. Please update your .env file with actual Supabase credentials.');
+      return { history: [] };
     }
 
     const { data, error } = await supabase.functions.invoke('get-project-history', {
