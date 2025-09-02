@@ -1,6 +1,5 @@
 import React from 'react';
-import { Agent, MeetingData } from '../types';
-import { GameState } from '../constants';
+import { Agent, MeetingData, GameState } from '../types';
 
 interface RoundtableMatrixProps {
     agents: Agent[];
@@ -69,12 +68,15 @@ const RoundtableMatrix: React.FC<RoundtableMatrixProps> = ({ agents, data, curre
                 <table className="w-full border-collapse">
                     <thead>
                         <tr>
-                            <th className="p-2 border border-gray-700 bg-gray-900/50 backdrop-blur-sm sticky left-0 z-10 w-28">
-                                <span className="text-gray-400">Asker <span className="font-normal text-xs block">↓</span> / Asked <span className="font-normal text-xs">→</span></span>
+                            <th className="p-2 border border-gray-700 bg-gray-900/50 backdrop-blur-sm sticky left-0 z-10 w-28 min-w-[7rem]">
+                                <span className="text-gray-400 text-sm">Asker↓/Asked→</span>
                             </th>
                             {agents.map(agent => (
                                 <th key={agent.id} className="p-2 border border-gray-700 bg-gray-800 text-indigo-300 font-semibold w-40 min-w-[10rem]">
-                                    {agent.name}
+                                    <div className="flex flex-col items-center justify-center gap-1">
+                                        <agent.avatar className="w-8 h-8" />
+                                        <span>{agent.name}</span>
+                                    </div>
                                 </th>
                             ))}
                         </tr>
@@ -82,8 +84,11 @@ const RoundtableMatrix: React.FC<RoundtableMatrixProps> = ({ agents, data, curre
                     <tbody>
                         {agents.map(rowAgent => (
                             <tr key={rowAgent.id}>
-                                <th className="p-2 border border-gray-700 bg-gray-800 text-indigo-300 font-semibold sticky left-0 z-10 bg-gray-900/50 backdrop-blur-sm w-28">
-                                    {rowAgent.name}
+                                <th className="p-2 border border-gray-700 text-indigo-300 font-semibold sticky left-0 z-10 bg-gray-900/50 backdrop-blur-sm w-28 min-w-[7rem]">
+                                    <div className="flex flex-col items-center justify-center gap-1">
+                                         <rowAgent.avatar className="w-8 h-8" />
+                                        <span>{rowAgent.name}</span>
+                                    </div>
                                 </th>
                                 {agents.map(colAgent => {
                                     const isCurrentTurn = (currentAgent?.id === rowAgent.id && (gameState === GameState.ROUND_1 || gameState === GameState.ROUND_2)) ||

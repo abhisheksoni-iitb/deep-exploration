@@ -31,13 +31,16 @@ const PlanReviewScreen: React.FC<PlanReviewScreenProps> = ({ plan, topic, onStar
                                 <h3 className="text-lg font-bold text-indigo-300">
                                     Meeting {index + 1}: <span className="font-normal">{meeting.goal}</span>
                                 </h3>
-                                <div className="mt-3 flex flex-wrap gap-2">
+                                <div className="mt-3 flex flex-wrap items-center gap-4">
                                     <span className="text-sm text-gray-400 font-semibold">Attendees:</span>
-                                    {meeting.agents?.map(agent => (
-                                        <span key={agent.id} className="bg-gray-700 text-gray-200 text-xs font-medium py-1 px-2.5 rounded-full">
-                                            {agent.name}
-                                        </span>
-                                    ))}
+                                    <div className="flex flex-wrap items-center gap-3">
+                                        {meeting.agents?.map(agent => (
+                                            <div key={agent.id} className="flex items-center gap-2 bg-gray-700 text-gray-200 text-xs font-medium py-1 pl-1 pr-3 rounded-full">
+                                                <agent.avatar className="w-5 h-5" />
+                                                <span>{agent.name}</span>
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
                             </div>
                         ))}

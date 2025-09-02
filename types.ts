@@ -1,8 +1,25 @@
-import { GameState } from './constants';
+import type React from 'react';
+
+export enum GameState {
+    SETUP,
+    PLANNING,
+    PLAN_REVIEW,
+    ROUND_1,
+    ROUND_2,
+    ROUND_3,
+    SYNTHESIS,
+    COMPLETE, // A single meeting is complete
+    AWAITING_USER_INPUT, // Waiting for user to provide context for the next meeting
+    FINAL_SYNTHESIS,
+    FINAL_COMPLETE, // Final summary is generated
+    ERROR
+}
 export interface Agent {
     id: string;
     name: string;
     persona: string;
+    shortPersona: string;
+    avatar: React.FC<React.SVGProps<SVGSVGElement>>;
 }
 
 export interface CrossQuestion {
@@ -68,6 +85,14 @@ export interface Summary {
     consensusPoints: string[];
 }
 
+export interface FinalSummary {
+    executiveSummary: string;
+    keyDecisionsAndPivots: string[];
+    finalActionPlan: string[];
+    outstandingRisks: string[];
+    projectConclusion: string;
+}
+
 
 export interface PlannedMeeting {
     goal: string;
@@ -81,6 +106,7 @@ export interface MeetingResult {
     transcript: TranscriptItem[];
     summary: Summary;
     duration: string;
+    userFeedback?: string;
 }
 
 export interface HistoryItem {
@@ -90,5 +116,13 @@ export interface HistoryItem {
     status: 'In Progress' | 'Completed';
     meetingPlan: PlannedMeeting[] | null;
     meetingResults: MeetingResult[];
-    finalSummary: string | null;
+    finalSummary: FinalSummary | null;
+    // For resuming in-progress meetings
+    gameState?: GameState;
+    currentAgentIndex?: number;
+    currentMeetingData?: MeetingData;
+    currentTranscript?: TranscriptItem[];
+    currentMeetingStartTime?: number | null;
 }
+
+export type FeedbackState = Record<string, 'up' | 'down' | null>;

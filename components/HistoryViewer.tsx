@@ -2,11 +2,32 @@ import React, { useState } from 'react';
 import { HistoryItem, MeetingResult } from '../types';
 import SummaryDisplay from './SummaryDisplay';
 import TranscriptLog from './TranscriptLog';
+import LightbulbIcon from './icons/LightbulbIcon';
+import ClipboardIcon from './icons/ClipboardIcon';
+import ShieldExclamationIcon from './icons/ShieldExclamationIcon';
+import CheckCircleIcon from './icons/CheckCircleIcon';
 
 interface HistoryViewerProps {
     item: HistoryItem;
     onClose: () => void;
 }
+
+const SummarySection: React.FC<{ title: string, items: string[], icon: React.ReactNode, color: string }> = ({ title, items, icon, color }) => {
+    if (!items || items.length === 0) return null;
+    return (
+        <div className={`bg-gray-900/50 p-4 rounded-lg border-l-4 ${color}`}>
+            <h3 className="text-lg font-semibold mb-3 flex items-center">
+                {icon}
+                <span className="ml-2">{title}</span>
+            </h3>
+            <ul className="list-disc list-inside space-y-2 text-gray-300 text-sm">
+                {items.map((item, index) => (
+                    <li key={index}>{item}</li>
+                ))}
+            </ul>
+        </div>
+    );
+};
 
 const MeetingAccordion: React.FC<{ result: MeetingResult, index: number }> = ({ result, index }) => {
     const [isOpen, setIsOpen] = useState(false);
@@ -74,9 +95,22 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ item, onClose }) => {
                 <div className="flex-grow overflow-y-auto pr-2 space-y-6">
                     {item.finalSummary && (
                         <div>
-                            <h3 className="text-2xl font-bold mb-3 text-indigo-400">Final Report</h3>
-                            <div className="bg-gray-800 p-4 rounded-lg">
-                                <p className="text-gray-300">{item.finalSummary}</p>
+                            <h3 className="text-2xl font-bold mb-3 text-green-400">Final Project Report</h3>
+                             <div className="bg-gray-800 p-4 rounded-lg space-y-4">
+                                <div className="bg-gray-900/50 p-4 rounded-md">
+                                    <h4 className="font-semibold text-lg text-indigo-300 mb-2">Executive Summary</h4>
+                                    <p className="text-gray-300 whitespace-pre-wrap">{item.finalSummary.executiveSummary}</p>
+                                </div>
+                                <SummarySection title="Key Decisions & Pivots" items={item.finalSummary.keyDecisionsAndPivots} icon={<LightbulbIcon className="w-6 h-6 text-yellow-400" />} color="border-yellow-500" />
+                                <SummarySection title="Final Action Plan" items={item.finalSummary.finalActionPlan} icon={<ClipboardIcon className="w-6 h-6 text-blue-400" />} color="border-blue-500" />
+                                <SummarySection title="Outstanding Risks" items={item.finalSummary.outstandingRisks} icon={<ShieldExclamationIcon className="w-6 h-6 text-red-400" />} color="border-red-500" />
+                                <div className="bg-gray-900/50 p-4 rounded-md border-t-2 border-green-500">
+                                    <h4 className="font-semibold text-lg text-indigo-300 mb-2 flex items-center gap-2">
+                                        <CheckCircleIcon className="w-6 h-6 text-green-400" />
+                                        Project Conclusion
+                                    </h4>
+                                    <p className="text-gray-200 font-medium whitespace-pre-wrap">{item.finalSummary.projectConclusion}</p>
+                                </div>
                             </div>
                         </div>
                     )}

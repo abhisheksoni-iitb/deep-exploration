@@ -37,22 +37,33 @@ const TranscriptLog: React.FC<TranscriptLogProps> = ({ transcript }) => {
                 return <div key={index} className="text-center text-sm text-gray-500 italic py-2">--- {item.content} ---</div>;
             case 'response':
                 return (
-                    <div key={index} className="p-3 bg-gray-700/50 rounded-lg">
-                        <p><strong className="text-indigo-400">{item.agent.name}:</strong> {item.content}</p>
-                        {renderSources(item.sources)}
+                    <div key={index} className="flex items-start gap-3 p-3 bg-gray-700/50 rounded-lg">
+                        <item.agent.avatar className="w-8 h-8 rounded-full flex-shrink-0 mt-1" />
+                        <div className="flex-grow">
+                             <strong className="text-indigo-400">{item.agent.name}:</strong>
+                             <p className="text-sm text-gray-200">{item.content}</p>
+                            {renderSources(item.sources)}
+                        </div>
                     </div>
                 );
             case 'question':
                  return (
-                    <div key={index} className="p-3 bg-gray-700/50 rounded-lg border-l-4 border-purple-500">
-                        <p><strong className="text-purple-400">{item.from.name} asks {item.to.name}:</strong> {item.content}</p>
+                    <div key={index} className="flex items-start gap-3 p-3 bg-gray-700/50 rounded-lg border-l-4 border-purple-500">
+                        <item.from.avatar className="w-8 h-8 rounded-full flex-shrink-0 mt-1" />
+                        <div className="flex-grow">
+                            <p className="text-sm"><strong className="text-purple-400">{item.from.name} asks {item.to.name}:</strong> {item.content}</p>
+                        </div>
                     </div>
                 );
             case 'answer':
                 return (
-                     <div key={index} className="p-3 bg-gray-700/50 rounded-lg border-l-4 border-green-500">
-                        <p><strong className="text-green-400">{item.agent.name} answers:</strong> {item.content}</p>
-                        {renderSources(item.sources)}
+                     <div key={index} className="flex items-start gap-3 p-3 bg-gray-700/50 rounded-lg border-l-4 border-green-500">
+                        <item.agent.avatar className="w-8 h-8 rounded-full flex-shrink-0 mt-1" />
+                         <div className="flex-grow">
+                             <strong className="text-green-400">{item.agent.name} answers:</strong>
+                             <p className="text-sm text-gray-200">{item.content}</p>
+                            {renderSources(item.sources)}
+                        </div>
                     </div>
                 );
             default:

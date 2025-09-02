@@ -1,6 +1,5 @@
 import React from 'react';
-import { Agent } from '../types';
-import { GameState } from '../constants';
+import { Agent, GameState } from '../types';
 
 interface TurnIndicatorProps {
     agents: Agent[];
@@ -27,15 +26,16 @@ const TurnIndicator: React.FC<TurnIndicatorProps> = ({ agents, currentAgent, gam
                 {agents.map((agent) => (
                     <div 
                         key={agent.id} 
-                        className={`flex-shrink-0 flex items-center p-2 px-3 rounded-full transition-all duration-300 ease-in-out border-2 ${
+                        className={`flex-shrink-0 flex items-center p-2 px-4 rounded-full transition-all duration-300 ease-in-out border-2 ${
                             agent.id === currentAgent?.id 
                                 ? 'bg-indigo-600 border-indigo-400 scale-110 shadow-lg' 
                                 : 'bg-gray-700 border-gray-600'
                         }`}
                     >
+                        <agent.avatar className="w-6 h-6 mr-2" />
                         <span className="text-sm font-semibold text-white">{agent.name}</span>
                         {agent.id === currentAgent?.id && (
-                             <span className="ml-2 w-3 h-3 bg-green-400 rounded-full animate-pulse"></span>
+                             <span className="ml-3 w-3 h-3 bg-green-400 rounded-full animate-pulse"></span>
                         )}
                     </div>
                 ))}

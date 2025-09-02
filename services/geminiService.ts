@@ -1,5 +1,5 @@
 import { GoogleGenAI, GenerateContentResponse, GenerateContentParameters } from "@google/genai";
-import { Agent, Round1Result, Round2Result, Round3Result, Summary, Source, PlannedMeeting, MeetingResult } from '../types';
+import { Agent, Round1Result, Round2Result, Round3Result, Summary, Source, PlannedMeeting, MeetingResult, FinalSummary, TranscriptItem } from '../types';
 
 if (!process.env.API_KEY) {
     console.warn("API_KEY environment variable not set. Using a placeholder. The app will not function correctly without a valid API key.");
@@ -55,86 +55,116 @@ const generateContentWithFallback = async (params: Omit<GenerateContentParameter
 
 
 const parseJsonResponse = <T,>(text: string, agentName: string): T => {
+    let jsonText = text;
+
+    // The model can sometimes wrap the JSON in ```json ... ```.
+    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (jsonMatch && jsonMatch[1]) {
+        jsonText = jsonMatch[1];
+    }
+
+    // Fallback for when it's not in a code block but might have text before/after
+    const firstBrace = jsonText.indexOf('{');
+    const firstBracket = jsonText.indexOf('[');
+    
+    let startIndex = -1;
+
+    if (firstBrace > -1 && firstBracket > -1) {
+        startIndex = Math.min(firstBrace, firstBracket);
+    } else if (firstBrace > -1) {
+        startIndex = firstBrace;
+    } else {
+        startIndex = firstBracket;
+    }
+
+    if (startIndex === -1) {
+        throw new Error(`No JSON object or array found in the response from ${agentName}.`);
+    }
+
+    const lastBrace = jsonText.lastIndexOf('}');
+    const lastBracket = jsonText.lastIndexOf(']');
+    const endIndex = Math.max(lastBrace, lastBracket);
+
+    if (endIndex === -1 || endIndex < startIndex) {
+         throw new Error(`JSON object or array not properly closed in the response from ${agentName}.`);
+    }
+
+    jsonText = jsonText.substring(startIndex, endIndex + 1);
+
     try {
-        // The model can sometimes wrap the JSON in ```json ... ```.
-        const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-        if (jsonMatch && jsonMatch[1]) {
-            return JSON.parse(jsonMatch[1]) as T;
-        }
-
-        // Fallback for when it's not in a code block but might have text before/after
-        const firstBrace = text.indexOf('{');
-        const firstBracket = text.indexOf('[');
-        
-        let startIndex = -1;
-
-        if (firstBrace > -1 && firstBracket > -1) {
-            startIndex = Math.min(firstBrace, firstBracket);
-        } else if (firstBrace > -1) {
-            startIndex = firstBrace;
-        } else {
-            startIndex = firstBracket;
-        }
-
-        if (startIndex === -1) {
-            throw new Error("No JSON object or array found in the response string.");
-        }
-
-        const lastBrace = text.lastIndexOf('}');
-        const lastBracket = text.lastIndexOf(']');
-
-        const endIndex = Math.max(lastBrace, lastBracket);
-
-        if (endIndex === -1 || endIndex < startIndex) {
-             throw new Error("JSON object or array not properly closed.");
-        }
-
-        const jsonText = text.substring(startIndex, endIndex + 1);
-        
+        // First attempt to parse the extracted text
         return JSON.parse(jsonText) as T;
-    } catch (e) {
-        console.error(`Failed to parse JSON from ${agentName}:`, text);
-        if (e instanceof Error) {
-            console.error("Parsing error:", e.message);
+    } catch (e1) {
+        console.warn(`Initial JSON parse for '${agentName}' failed. Attempting to fix common LLM errors. Error: ${(e1 as Error).message}`);
+        
+        try {
+            // Fix 1: Replace all newline characters with a space. This is safer than trying to escape them,
+            // as it won't corrupt the JSON structure if the model uses newlines for formatting.
+            // This might cause loss of formatting in the final text, but it ensures parsability.
+            let fixedJson = jsonText.replace(/(\r\n|\n|\r)/gm, " ");
+
+            // Fix 2: Trailing commas in objects and arrays.
+            fixedJson = fixedJson.replace(/,\s*([}\]])/g, '$1');
+
+            return JSON.parse(fixedJson) as T;
+        } catch (e2) {
+            console.error(`Failed to parse JSON from ${agentName} even after cleaning.`);
+            console.error('Original Text:', text);
+            if (e1 instanceof Error) {
+                console.error("Original parsing error:", e1.message);
+            }
+            if (e2 instanceof Error) {
+                console.error("Second parsing error:", e2.message);
+            }
+            // Re-throw the original error to be caught by the UI handler.
+            throw new Error(`The response from ${agentName} was not valid JSON, even after attempting to fix it.`);
         }
-        throw new Error(`The response from ${agentName} was not valid JSON.`);
     }
 };
+
+const JSON_FORMATTING_INSTRUCTION = `CRITICAL FORMATTING RULE: Your entire response must be ONLY a single, raw, valid JSON object. Do not add any text, markdown, or formatting before or after the JSON. In all string values, you MUST correctly escape all special characters. Specifically, any double quote (") inside a string must be written as \\", and any newline character must be written as \\n.
+
+CORRECT EXAMPLE for a string value:
+{ "key": "This is a string with \\"quotes\\" and a\\nnew line." }
+
+INCORRECT EXAMPLE:
+{ "key": "This string has "unescaped" quotes and a
+new line." }
+
+Your JSON must be perfectly parsable by a standard JSON parser. Do not wrap the JSON in markdown like \`\`\`json ... \`\`\`.`;
 
 
 export const planMeetings = async (topic: string, allAgents: Agent[]): Promise<PlannedMeeting[]> => {
     const prompt = `
-        You are an expert project manager. Your task is to plan a series of focused, sequential roundtable meetings to comprehensively analyze a topic. The output of one meeting should logically feed into the next.
+        You are an expert project manager and strategist. Your task is to devise a logical and efficient series of meetings to analyze a project from inception to a go-to-market plan.
 
         Topic: "${topic}"
 
         Available Experts (use their 'id' for selection):
-        ${allAgents.map(a => `- ${a.name} (id: ${a.id})`).join('\n')}
+        ${allAgents.map(a => `- ${a.name} (id: ${a.id}) - Core function: ${a.shortPersona}`).join('\n')}
 
-        Key Constraints:
-        1.  **Strict 3-Expert Limit Per Meeting:** Each meeting MUST have a maximum of 3 experts. This is a non-negotiable rule for ensuring focused and efficient discussions. Do not create meetings with more than 3 participants.
-        2.  **Logical Sequence:** Create a logical flow of meetings. A typical project might need 2-4 meetings (e.g., 1. Strategy & Vision, 2. Technical Feasibility & Design, 3. Go-to-Market & Launch). The goal of each meeting should build upon the previous one.
-        3.  **Optimal Selection:** For each meeting, select only the most critical experts needed to achieve that specific meeting's goal. Think carefully about which perspectives are needed at each stage. If more expertise is required than can fit in one meeting, create a separate, subsequent meeting.
+        Your goal is to create a project plan as a series of meetings. Follow these rules strictly:
+        1.  **Project Lifecycle Flow:** The meetings must follow a logical project lifecycle. Start with strategy and validation, then move to feasibility and design, and finally cover execution and go-to-market.
+        2.  **Strict 3-Expert Limit Per Meeting:** Each meeting MUST have exactly 3 experts. No more, no less. This is a critical constraint for focus.
+        3.  **Optimal Expert Selection:** For each meeting's goal, select the three most critical experts. For example, a "Strategy & Market Validation" meeting should involve roles like Product Manager, VC, and Marketing Lead. A "Technical Feasibility" meeting needs the Tech Lead, UX/UI Designer, and maybe a Risk Analyst or Legal Counsel if there are specific concerns. Do not bring in execution-focused roles (like Sales or Support) into early strategy meetings.
+        4.  **Actionable Goals:** Each meeting must have a concise, actionable 'goal'.
+        5.  **Number of Meetings:** Plan for 2 to 4 meetings in total.
 
-        Your tasks:
-        1.  Determine the number of meetings required (between 1 and 4).
-        2.  For each meeting, provide a concise 'goal' that is a clear, actionable objective.
-        3.  For each meeting, select the necessary experts by their 'id' from the provided list, adhering to the strict 3-expert limit.
+        ${JSON_FORMATTING_INSTRUCTION}
 
-        Format your entire response as a single JSON object, and nothing else. Do not include markdown formatting. The JSON object must be an array, where each element represents a meeting.
-        Example format:
+        Example of a good, logical plan:
         [
           {
-            "goal": "Define the core user problem and validate the market opportunity.",
+            "goal": "Define the product vision, validate the market opportunity, and assess the business case.",
             "agentIds": ["product", "vc", "marketing"]
           },
           {
-            "goal": "Assess technical feasibility and outline the initial UX/UI flow.",
-            "agentIds": ["tech", "design", "product"]
+            "goal": "Determine technical feasibility, design the core user experience, and identify legal risks.",
+            "agentIds": ["tech", "design", "legal"]
           },
           {
-            "goal": "Develop a go-to-market strategy and identify key growth channels.",
-            "agentIds": ["marketing", "growth", "sales"]
+            "goal": "Develop the go-to-market strategy, financial projections, and operational plan.",
+            "agentIds": ["growth", "finance", "operations"]
           }
         ]
     `;
@@ -153,7 +183,11 @@ export const runRoundForAgent = async (
     agent: Agent,
     topic: string,
     otherAgents: Agent[],
-    meetingContext?: { meetingGoal: string; previousMeetingSummary?: Summary }
+    meetingContext?: { 
+        meetingGoal: string; 
+        previousMeetingSummary?: Summary;
+        userContext?: string;
+    }
 ): Promise<Round1Result> => {
     
     const contextPrompt = meetingContext?.previousMeetingSummary ? `
@@ -166,10 +200,19 @@ export const runRoundForAgent = async (
         - Consensus Points: ${meetingContext.previousMeetingSummary.consensusPoints.join('; ')}
     ` : `This is the first meeting on this topic. The goal of this meeting is: "${meetingContext?.meetingGoal}"`;
 
+    const userContextPrompt = meetingContext?.userContext ? `
+        IMPORTANT: You must also consider the following feedback and direction from the user, which was provided after the previous meeting concluded. This is a critical instruction to guide your response.
+        --- USER DIRECTION ---
+        ${meetingContext.userContext}
+        --- END USER DIRECTION ---
+    ` : '';
+
     const prompt = `
         Overall Topic: "${topic}"
 
         ${contextPrompt}
+
+        ${userContextPrompt}
 
         Your Role: ${agent.persona}
 
@@ -178,12 +221,14 @@ export const runRoundForAgent = async (
         Use your access to Google Search to find the latest information, data, and trends to inform your answer.
 
         Your tasks:
-        1.  **Main Answer:** Provide your primary expert analysis on the topic, keeping this meeting's specific goal in mind. Be concise, using bullet points if helpful (max 100 words).
-        2.  **Cross-Questions:** Raise a maximum of 2 brief, insightful questions for up to 2 other specific experts from the list for this meeting. Your questions should challenge their perspective or ask for clarification based on this meeting's goal.
+        1.  **In-Depth Analysis:** Provide your primary expert analysis on the topic, adhering strictly to the specific deliverables and mindset outlined in your persona. Your answer should be detailed, insightful, and directly address the meeting's goal. Support your points with specific data, real-world examples, or the frameworks mentioned in your persona. Avoid generic statements. Aim for a comprehensive and actionable response.
+        2.  **Cross-Questions:** Raise a maximum of 2 brief, insightful questions for up to 2 other specific experts in this meeting. Your questions should challenge their perspective or ask for clarification based on this meeting's goal.
 
-        Format your entire response as a single JSON object, and nothing else. Do not include markdown formatting like \`\`\`json. The JSON object must look like this:
+        ${JSON_FORMATTING_INSTRUCTION}
+
+        The JSON object must have this exact structure. Do not add or remove keys.
         {
-          "mainAnswer": "Your concise analysis here.",
+          "mainAnswer": "Your comprehensive and detailed analysis here. Remember to escape characters correctly, like this: \\"quoted text\\" and newlines like this.\\nAnother line.",
           "crossQuestions": [
             { "ask_expert": "Expert Name", "question": "Your question for them." },
             { "ask_expert": "Another Expert Name", "question": "Your second question." }
@@ -204,8 +249,13 @@ export const runRoundForAgent = async (
         .filter((web): web is { uri: string; title: string } => !!(web?.uri && web.title));
 
 
-    const result = parseJsonResponse<Omit<Round1Result, 'sources'>>(response.text, agent.name);
-    return { ...result, sources };
+    const parsed = parseJsonResponse<Partial<Omit<Round1Result, 'sources'>>>(response.text, agent.name);
+    const result: Round1Result = {
+        mainAnswer: parsed.mainAnswer || '',
+        crossQuestions: parsed.crossQuestions || [],
+        sources,
+    };
+    return result;
 };
 
 export const runFollowUpForAgent = async (
@@ -225,10 +275,12 @@ export const runFollowUpForAgent = async (
         Use your access to Google Search to find the latest information, data, and trends to inform your answers.
 
         Your tasks:
-        1. **Answer Questions:** Provide concise, direct answers to each of these questions.
-        2. **Raise Follow-up Questions:** Based on the discussion so far and the questions you just answered, raise a maximum of 2 new, brief follow-up questions for up to 2 other experts to deepen the conversation.
+        1. **Answer Questions:** Provide concise, direct answers to each of these questions based on your persona.
+        2. **Raise Follow-up Questions:** Based on the discussion so far, raise a maximum of 2 new, brief follow-up questions for up to 2 other experts to deepen the conversation.
 
-        Format your entire response as a single JSON object, and nothing else. Do not include markdown formatting. The JSON object must look like this:
+        ${JSON_FORMATTING_INSTRUCTION}
+
+        The JSON object must have this exact structure. Do not add or remove keys.
         {
           "answers": [
             { "question": "The first question you were asked.", "answer": "Your answer to it." }
@@ -251,8 +303,13 @@ export const runFollowUpForAgent = async (
         .map(chunk => chunk.web)
         .filter((web): web is { uri: string; title: string } => !!(web?.uri && web.title));
         
-    const result = parseJsonResponse<Omit<Round2Result, 'sources'>>(response.text, agent.name);
-    return { ...result, sources };
+    const parsed = parseJsonResponse<Partial<Omit<Round2Result, 'sources'>>>(response.text, agent.name);
+    const result: Round2Result = {
+        answers: parsed.answers || [],
+        crossQuestions: parsed.crossQuestions || [],
+        sources,
+    };
+    return result;
 };
 
 export const runRound3ForAgent = async (
@@ -270,7 +327,9 @@ export const runRound3ForAgent = async (
 
         Your task is to provide concise, final answers to each of these questions. Do NOT ask any new questions.
 
-        Format your entire response as a single JSON object, and nothing else. Do not include markdown formatting. The JSON object must look like this:
+        ${JSON_FORMATTING_INSTRUCTION}
+        
+        The JSON object must have this exact structure. Do not add or remove keys.
         {
           "answers": [
             { "question": "The first question you were asked.", "answer": "Your final answer to it." },
@@ -286,28 +345,47 @@ export const runRound3ForAgent = async (
         }
     });
 
-    return parseJsonResponse<Round3Result>(response.text, agent.name);
+    const parsed = parseJsonResponse<Partial<Round3Result>>(response.text, agent.name);
+    const result: Round3Result = {
+        answers: parsed.answers || [],
+    };
+    return result;
 };
 
 
 export const synthesizeTranscript = async (
     topic: string,
     agents: Agent[],
-    transcript: string
+    transcript: TranscriptItem[]
 ): Promise<Summary> => {
+    // Optimization: Condense the transcript to only include the most important parts (main answers and final answers)
+    // to reduce token count for the summary generation.
+    const condensedTranscript = transcript
+        .filter(item => item.type === 'response' || item.type === 'answer')
+        .map(item => {
+            if (item.type === 'response') {
+                return `[${item.agent.name}'s Main Answer]: ${item.content}`;
+            }
+            if (item.type === 'answer') {
+                 return `[${item.agent.name}'s Answer]: ${item.content}`;
+            }
+            return '';
+        })
+        .join('\n\n');
+        
     const prompt = `
-        Analyze the following roundtable meeting transcript.
-        The goal was to discuss: "${topic}"
+        You are an expert meeting facilitator. Analyze the following condensed roundtable meeting transcript.
+        The goal of this meeting was to discuss: "${topic}"
         The participants were: ${agents.map(a => a.name).join(', ')}
 
-        Transcript:
+        Condensed Transcript:
         ---
-        ${transcript}
+        ${condensedTranscript}
         ---
 
-        Based on the entire discussion, generate a comprehensive summary. Your summary should be structured as a JSON object with the following keys: "keyInsights", "actionItems", "potentialRisks", and "consensusPoints". Each key should have an array of strings as its value.
+        Based on the entire discussion, generate a comprehensive summary. Your summary must be structured as a JSON object with the following keys: "keyInsights", "actionItems", "potentialRisks", and "consensusPoints". Each key must have an array of strings as its value. Ensure each point is concise and actionable.
 
-        Format your entire response as a single JSON object, and nothing else. Do not include markdown formatting like \`\`\`json.
+        ${JSON_FORMATTING_INSTRUCTION}
     `;
 
     const response = await generateContentWithFallback({
@@ -317,23 +395,29 @@ export const synthesizeTranscript = async (
         }
     });
 
-    return parseJsonResponse<Summary>(response.text, "Synthesis Agent");
+    const parsed = parseJsonResponse<Partial<Summary>>(response.text, "Synthesis Agent");
+    const result: Summary = {
+        keyInsights: parsed.keyInsights || [],
+        actionItems: parsed.actionItems || [],
+        potentialRisks: parsed.potentialRisks || [],
+        consensusPoints: parsed.consensusPoints || [],
+    };
+    return result;
 };
 
 export const synthesizeSeries = async (
     topic: string,
     meetingResults: MeetingResult[]
-): Promise<{finalSummary: string}> => {
+): Promise<{finalSummary: FinalSummary}> => {
     const prompt = `
-        You are a senior executive analyzing the outcomes of a series of meetings about a project.
+        You are a Chief of Staff responsible for creating a final executive report for a project. You have been given the summaries from a series of meetings.
 
         Project Topic: "${topic}"
 
-        The project progressed through several meetings, each with its own summary. Here are the summaries in chronological order:
+        Here are the meeting summaries in chronological order:
         ${meetingResults.map((result, index) => `
         ---
-        Meeting ${index + 1}: ${result.goal}
-        Summary:
+        Meeting ${index + 1} (Goal: ${result.goal})
         - Key Insights: ${result.summary.keyInsights.join('; ')}
         - Action Items: ${result.summary.actionItems.join('; ')}
         - Potential Risks: ${result.summary.potentialRisks.join('; ')}
@@ -341,12 +425,23 @@ export const synthesizeSeries = async (
         ---
         `).join('\n')}
 
-        Your task is to synthesize all these summaries into a single, high-level final report for the board. This report should summarize the project's journey and final conclusion. It should be a concise paragraph (max 200 words) that captures the most critical outcomes, decisions, and next steps.
+        Your task is to synthesize all of the above information into a single, structured Final Project Report. Do not just repeat the inputs; analyze and consolidate them into a coherent final assessment.
 
-        Format your response as a single JSON object with one key, "finalSummary".
-        Example:
+        ${JSON_FORMATTING_INSTRUCTION}
+
+        Your response must be a JSON object with the following structure:
         {
-            "finalSummary": "The project to build a Gen-Z social app began with strong market validation but faced significant technical hurdles. The final plan involves a phased rollout, focusing initially on core chat features, with a revised, more targeted marketing strategy. The primary risk remains user acquisition cost, which will be closely monitored post-launch."
+          "executiveSummary": "A concise, high-level paragraph (3-4 sentences) summarizing the project's journey from concept to conclusion, and the final recommendation.",
+          "keyDecisionsAndPivots": [
+            "A bulleted list of the most critical decisions made or strategic pivots that occurred during the meetings."
+          ],
+          "finalActionPlan": [
+            "A consolidated, prioritized list of the most important, actionable next steps for the project to move forward."
+          ],
+          "outstandingRisks": [
+            "A bulleted list of the most significant risks that remain unresolved or require ongoing monitoring."
+          ],
+          "projectConclusion": "A clear, one-sentence final recommendation for the project (e.g., 'Proceed with funding and begin MVP development.', 'Conduct further market research before committing resources.', 'Shelve the project due to significant market risks.')."
         }
     `;
 
@@ -357,5 +452,13 @@ export const synthesizeSeries = async (
         }
     });
 
-    return parseJsonResponse<{finalSummary: string}>(response.text, "Final Synthesis Agent");
+    const parsed = parseJsonResponse<Partial<FinalSummary>>(response.text, "Final Synthesis Agent");
+    const result: FinalSummary = {
+        executiveSummary: parsed.executiveSummary || "No summary was generated.",
+        keyDecisionsAndPivots: parsed.keyDecisionsAndPivots || [],
+        finalActionPlan: parsed.finalActionPlan || [],
+        outstandingRisks: parsed.outstandingRisks || [],
+        projectConclusion: parsed.projectConclusion || "No conclusion was reached."
+    };
+    return { finalSummary: result };
 }

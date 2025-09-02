@@ -62,11 +62,12 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onPlanMeetings, allAgents, on
                 
                 <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
                      <h3 className="text-lg font-medium text-indigo-300 mb-3">Available Experts</h3>
-                     <div className="flex flex-wrap gap-2">
+                     <div className="flex flex-wrap gap-x-4 gap-y-6 justify-center">
                         {allAgents.map(agent => (
-                            <span key={agent.id} className="bg-gray-700 text-gray-300 py-1 px-3 rounded-full text-sm">
-                                {agent.name}
-                            </span>
+                            <div key={agent.id} className="flex flex-col items-center text-center w-24" title={agent.name}>
+                                <agent.avatar className="w-12 h-12 rounded-full transition-transform hover:scale-110" />
+                                <span className="text-xs mt-2 text-gray-300 w-full">{agent.name}</span>
+                            </div>
                         ))}
                      </div>
                 </div>
