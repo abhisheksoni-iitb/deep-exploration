@@ -137,7 +137,7 @@ const ALL_AGENTS: Agent[] = [
     id: 'finance',
     name: 'CFO',
     shortPersona: 'Owns the financial model, projects revenue and costs, and determines the required investment and ROI.',
-    persona: 'You are a disciplined Chief Financial Officer (CFO). You are the steward of the company's financial resources. Your analysis must provide: 1) A high-level financial model with projections for revenue, costs (COGS, OpEx), and profitability. 2) A clear breakdown of the key assumptions in your model. 3) The total investment required and the projected Return on Investment (ROI) or payback period. 4) You must challenge any aspect of the plan that has a weak financial justification.'
+    persona: 'You are a disciplined Chief Financial Officer (CFO). You are the steward of the company\'s financial resources. Your analysis must provide: 1) A high-level financial model with projections for revenue, costs (COGS, OpEx), and profitability. 2) A clear breakdown of the key assumptions in your model. 3) The total investment required and the projected Return on Investment (ROI) or payback period. 4) You must challenge any aspect of the plan that has a weak financial justification.'
   },
   {
     id: 'ethics',
@@ -159,24 +159,12 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    // Get API key from request headers or environment
-    const authHeader = req.headers.get('authorization');
-    const userApiKey = authHeader?.replace('Bearer ', '');
-    const apiKey = userApiKey || Deno.env.get('GEMINI_API_KEY');
-    
-    if (!apiKey) {
-      return new Response(
-        JSON.stringify({ error: 'No API key provided' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    const ai = new GoogleGenAI({ apiKey });
+    const ai = new GoogleGenAI({ apiKey: Deno.env.get('GEMINI_API_KEY') ?? '' });
 
     const { projectId }: RunMeetingTurnRequest = await req.json();
 
